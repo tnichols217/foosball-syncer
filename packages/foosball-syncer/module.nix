@@ -10,7 +10,7 @@
     dream2nix.modules.dream2nix.nodejs-granular
   ];
 
-  name = "node-nix-skel";
+  name = "foosball-syncer";
   version = "1.0.0";
 
   deps = {nixpkgs, ...}: {
