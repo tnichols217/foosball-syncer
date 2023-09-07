@@ -1,0 +1,1 @@
+# Skeleton Project for node.js + dream2nix + nix build system
