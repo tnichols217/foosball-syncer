@@ -74,12 +74,60 @@ const matchValidators = (validators: ParsedRowData[], inputs: ParsedRowData[]): 
     return o
 }
 
+type pointData = {
+    Bias: number;
+    Weight: number;
+}
+
+const SETWEIGHT = 0;
+const MATCHWEIGHT = 0;
+const ALLWEIGHT = 0;
+
+const weightTime = (time: Date, now: Date = new Date()): number => {
+    let diff = now.getUTCMilliseconds() - time.getUTCMilliseconds()
+    const halfLife = 14*24*60*60*1000; // 14 days
+    return Math.pow(0.5, (diff / halfLife))
+}
+
+const matchToPointData = (row: ParsedRowData): pointData[] => {
+    let timeWeight = weightTime(row.Timestamp)
+    let o = row.Scores.map(score => {
+        return {
+            Bias: score[0] / score[1],
+            Weight: (score[0] + score[1] + ALLWEIGHT) * timeWeight
+        } as pointData
+    })
+    let sets = row.Scores.reduce<[number, number]>((a, b) => { return [a[0] + +(b[0] > b[1]), a[1] + +(b[0] < b[1])] }, [0, 0])
+    o.push({
+        Bias: sets[0] / sets[1],
+        Weight: (sets[0] + sets[1] + ALLWEIGHT) * SETWEIGHT * timeWeight
+    }, {
+        Bias: +(sets[0] > sets[1]),
+        Weight: (MATCHWEIGHT + ALLWEIGHT) * timeWeight
+    })
+
+    return o
+}
+
+const WEIGHTWEIGHT = 1.5; // Weight combination weight
+
+const combinePointData = (pointData: pointData[]): pointData => {
+    let Weights = pointData.map(p => p.Weight)
+    let Bias = pointData.map(p => p.Bias * p.Weight).reduce((a, b) => a + b)/Weights.reduce((a, b) => a + b)
+    let Weight = Math.pow(Weights.map(w => Math.pow(w, WEIGHTWEIGHT)).reduce((a, b) => a + b), 1/WEIGHTWEIGHT)
+    return {
+        Bias: Bias,
+        Weight: Weight
+    }
+}
+
 const doc = new GoogleSpreadsheet(SPREADSHEET, serviceAccountAuth);
 doc.loadInfo().then(async () => {
     const sheet = doc.sheetsByIndex[0];
     const userRows = await sheet.getRows<UsersRowData>();
     const parsedRows = userRows.map(row => parseRowData(row.toObject() as UsersRowData));
     const verifiedInputs = matchValidators(bucketValidators(parsedRows), bucketInputs(parsedRows))
+    const pointData = verifiedInputs.map(row => matchToPointData(row))
 
-    console.log(verifiedInputs);
+    console.log(pointData);
 });
