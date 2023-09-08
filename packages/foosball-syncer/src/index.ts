@@ -75,8 +75,18 @@ const matchValidators = (validators: ParsedRowData[], inputs: ParsedRowData[]): 
 }
 
 type pointData = {
-    Bias: number;
+    Score: [number, number];
     Weight: number;
+}
+
+type peoplePair = {
+    opponent: string;
+    submitter: string;
+}
+
+type peoplePairPoints = {
+    peoplePair: peoplePair;
+    points: pointData;
 }
 
 const SETWEIGHT = 0;
@@ -93,16 +103,16 @@ const matchToPointData = (row: ParsedRowData): pointData[] => {
     let timeWeight = weightTime(row.Timestamp)
     let o = row.Scores.map(score => {
         return {
-            Bias: score[0] / score[1],
+            Score: [score[0] / (score[0] + score[1]), score[1] / (score[0] + score[1])],
             Weight: (score[0] + score[1] + ALLWEIGHT) * timeWeight
         } as pointData
     })
     let sets = row.Scores.reduce<[number, number]>((a, b) => { return [a[0] + +(b[0] > b[1]), a[1] + +(b[0] < b[1])] }, [0, 0])
     o.push({
-        Bias: sets[0] / sets[1],
+        Score: [sets[0] / (sets[0] + sets[1]), sets[1] / (sets[0] + sets[1])],
         Weight: (sets[0] + sets[1] + ALLWEIGHT) * SETWEIGHT * timeWeight
     }, {
-        Bias: +(sets[0] > sets[1]),
+        Score: [+(sets[0] > sets[1]), +(sets[0] < sets[1])],
         Weight: (MATCHWEIGHT + ALLWEIGHT) * timeWeight
     })
 
@@ -113,12 +123,77 @@ const WEIGHTWEIGHT = 1.5; // Weight combination weight
 
 const combinePointData = (pointData: pointData[]): pointData => {
     let Weights = pointData.map(p => p.Weight)
-    let Bias = pointData.map(p => p.Bias * p.Weight).reduce((a, b) => a + b)/Weights.reduce((a, b) => a + b)
+    let W = Weights.reduce((a, b) => a + b)
+    let Score = pointData.map(p => [p.Score[0] * p.Weight, p.Score[1] * p.Weight]).reduce((a, b) => [a[0] + b[0], a[1] + b[1]], [0, 0]).map(a => a / W)
     let Weight = Math.pow(Weights.map(w => Math.pow(w, WEIGHTWEIGHT)).reduce((a, b) => a + b), 1/WEIGHTWEIGHT)
     return {
-        Bias: Bias,
+        Score: Score as [number, number],
         Weight: Weight
     }
+}
+
+const getPeople = (rows: ParsedRowData[]): string[] => {
+    let o = [] as string[]
+    for ( let row of rows ) {
+        if (o.indexOf(row.Submitter) < 0) {
+            o.push(row.Submitter)
+        }
+        if (o.indexOf(row.Opponent) < 0) {
+            o.push(row.Opponent)
+        }
+    }
+    return o.sort()
+}
+
+const getPeoplePair = (row: ParsedRowData): peoplePair => {
+    return {
+        opponent: row.Opponent,
+        submitter: row.Submitter
+    }
+}
+
+const sortPeoplePairPoints = (row: peoplePairPoints): peoplePairPoints => {
+    let o = {} as peoplePairPoints
+    if (row.peoplePair.submitter > row.peoplePair.opponent) {
+        o.peoplePair = {
+            opponent: row.peoplePair.submitter,
+            submitter: row.peoplePair.opponent
+        }
+        o.points = {
+            Score: [row.points.Score[1], row.points.Score[0]],
+            Weight: row.points.Weight
+        }
+    } else {
+        o = row
+    }
+    return o
+}
+
+type peoplePairPointBucket = {
+    [key: string]: {
+        [key: string]: pointData
+    }
+}
+
+const bucketPairPoints = (points: peoplePairPoints[]): peoplePairPointBucket => {
+    let o = {} as peoplePairPointBucket
+    for ( let point of points ) {
+        if (o[point.peoplePair.submitter] == undefined) {
+            o[point.peoplePair.submitter] = {}
+        }
+
+        if (o[point.peoplePair.submitter][point.peoplePair.opponent] == undefined) {
+            o[point.peoplePair.submitter][point.peoplePair.opponent] = { Score: [0, 0], Weight: 0}
+        }
+
+        o[point.peoplePair.submitter][point.peoplePair.opponent] = combinePointData([o[point.peoplePair.submitter][point.peoplePair.opponent], point.points])
+    }
+    return o
+}
+
+const springForceWeight = (point: pointData, distance: number): number => {
+    //TODO: calculates force exerted upon other points based on pointdata and distance
+    return 0
 }
 
 const doc = new GoogleSpreadsheet(SPREADSHEET, serviceAccountAuth);
@@ -127,7 +202,15 @@ doc.loadInfo().then(async () => {
     const userRows = await sheet.getRows<UsersRowData>();
     const parsedRows = userRows.map(row => parseRowData(row.toObject() as UsersRowData));
     const verifiedInputs = matchValidators(bucketValidators(parsedRows), bucketInputs(parsedRows))
-    const pointData = verifiedInputs.map(row => matchToPointData(row))
+    const people = getPeople(verifiedInputs)
+    const pointData = verifiedInputs.map(row => {
+        return sortPeoplePairPoints({
+            points: combinePointData(matchToPointData(row)),
+            peoplePair: getPeoplePair(row)
+        })
+    })
+    const bucketPairs = bucketPairPoints(pointData)
 
-    console.log(pointData);
+    console.log(people);
+    console.log(bucketPairs);
 });
