@@ -1,6 +1,8 @@
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library'
 import dotenv from "dotenv"
+import { UsersRowData, VerifiedInputs } from "./index/parsedRow"
+import { PeoplePointBucket, PeoplePointData } from "./index/pointData"
 let env = dotenv.config().parsed as any
 
 const SPREADSHEET = "1ajVhu1WlCYArATAQM2suTGiz1PKv6PIXSUqJBT5e_hM"
@@ -17,200 +19,35 @@ const serviceAccountAuth = new JWT({
     ],
 });
 
-type UsersRowData = {
-    "Timestamp": string;
-    "Email Address": string;
-    "Action": 'Submit Scores' | 'Validate Scores';
-    "Scores": string;
-    "Case ID of opponent": string;
-    "Agree to the scores submitted by opponent?": "Yes" | "No";
-};
+// const getPeople = (rows: ParsedRowData[]): string[] => {
+//     let o = [] as string[]
+//     for ( let row of rows ) {
+//         if (o.indexOf(row.Submitter) < 0) {
+//             o.push(row.Submitter)
+//         }
+//         if (o.indexOf(row.Opponent) < 0) {
+//             o.push(row.Opponent)
+//         }
+//     }
+//     return o.sort()
+// }
 
-const COLUMN = {
-    TIMESTAMP: "Timestamp",
-    EMAIL: "Email Address",
-    ACTION: "Action",
-    SCORES: "Scores",
-    CASE_ID_OF_OPPONENT: "Case ID of opponent",
-    AGREE: "Agree to the scores submitted by opponent?"
-} as {[key: string]: keyof UsersRowData}
+// const springForceWeight = (point: pointData, distance: number): number => {
+//     //TODO: calculates force exerted upon other points based on pointdata and distance
+//     //!
 
-type Scores = [number, number][];
-
-type ParsedRowData = {
-    "Timestamp": Date;
-    "Submitter": string;
-    "Submit": boolean;
-    "Scores": Scores;
-    "Opponent": string;
-};
-
-const parseRowData = (rowData: UsersRowData): ParsedRowData => {
-    return {
-        "Timestamp": new Date(rowData["Timestamp"]),
-        "Submitter": rowData["Email Address"].split("@")[0],
-        "Submit": rowData["Action"] === "Submit Scores",
-        "Scores": rowData["Scores"].split("\n").filter(row => row.length >= 3).map(row => row.split("-").map(a => parseInt(a))),
-        "Opponent": rowData["Case ID of opponent"]
-    } as ParsedRowData
-}
-
-const bucketInputs = (rowData: ParsedRowData[]): ParsedRowData[] =>
-    rowData.filter(row => row.Submit && row.Scores.length > 0).sort((a, b) => a.Timestamp.getTime() - b.Timestamp.getTime())
-
-const bucketValidators = (rowData: ParsedRowData[]): ParsedRowData[] =>
-    rowData.filter(row => !row.Submit).sort((a, b) => a.Timestamp.getTime() - b.Timestamp.getTime())
-
-const matchValidators = (validators: ParsedRowData[], inputs: ParsedRowData[]): ParsedRowData[] => {
-    let o: ParsedRowData[] = []
-    for ( let inp of inputs ) {
-        validators.splice(0, validators.findIndex(val => inp.Timestamp.getUTCMilliseconds() - val.Timestamp.getUTCMilliseconds() < SUBMIT_PREINTERVAL))
-        let valid = validators.findIndex(val => inp.Opponent == val.Submitter && val.Timestamp.getUTCMilliseconds() - inp.Timestamp.getUTCMilliseconds() < SUBMIT_INTERVAL)
-        if (valid != -1) {
-            o.push(inp)
-            validators.splice(valid, 1)
-        }
-    }
-    return o
-}
-
-type pointData = {
-    Score: [number, number];
-    Weight: number;
-}
-
-type peoplePair = {
-    opponent: string;
-    submitter: string;
-}
-
-type peoplePairPoints = {
-    peoplePair: peoplePair;
-    points: pointData;
-}
-
-const SETWEIGHT = 0;
-const MATCHWEIGHT = 0;
-const ALLWEIGHT = 0;
-
-const weightTime = (time: Date, now: Date = new Date()): number => {
-    let diff = now.getUTCMilliseconds() - time.getUTCMilliseconds()
-    const halfLife = 14*24*60*60*1000; // 14 days
-    return Math.pow(0.5, (diff / halfLife))
-}
-
-const matchToPointData = (row: ParsedRowData): pointData[] => {
-    let timeWeight = weightTime(row.Timestamp)
-    let o = row.Scores.map(score => {
-        return {
-            Score: [score[0] / (score[0] + score[1]), score[1] / (score[0] + score[1])],
-            Weight: (score[0] + score[1] + ALLWEIGHT) * timeWeight
-        } as pointData
-    })
-    let sets = row.Scores.reduce<[number, number]>((a, b) => { return [a[0] + +(b[0] > b[1]), a[1] + +(b[0] < b[1])] }, [0, 0])
-    o.push({
-        Score: [sets[0] / (sets[0] + sets[1]), sets[1] / (sets[0] + sets[1])],
-        Weight: (sets[0] + sets[1] + ALLWEIGHT) * SETWEIGHT * timeWeight
-    }, {
-        Score: [+(sets[0] > sets[1]), +(sets[0] < sets[1])],
-        Weight: (MATCHWEIGHT + ALLWEIGHT) * timeWeight
-    })
-
-    return o
-}
-
-const WEIGHTWEIGHT = 1.5; // Weight combination weight
-
-const combinePointData = (pointData: pointData[]): pointData => {
-    let Weights = pointData.map(p => p.Weight)
-    let W = Weights.reduce((a, b) => a + b)
-    let Score = pointData.map(p => [p.Score[0] * p.Weight, p.Score[1] * p.Weight]).reduce((a, b) => [a[0] + b[0], a[1] + b[1]], [0, 0]).map(a => a / W)
-    let Weight = Math.pow(Weights.map(w => Math.pow(w, WEIGHTWEIGHT)).reduce((a, b) => a + b), 1/WEIGHTWEIGHT)
-    return {
-        Score: Score as [number, number],
-        Weight: Weight
-    }
-}
-
-const getPeople = (rows: ParsedRowData[]): string[] => {
-    let o = [] as string[]
-    for ( let row of rows ) {
-        if (o.indexOf(row.Submitter) < 0) {
-            o.push(row.Submitter)
-        }
-        if (o.indexOf(row.Opponent) < 0) {
-            o.push(row.Opponent)
-        }
-    }
-    return o.sort()
-}
-
-const getPeoplePair = (row: ParsedRowData): peoplePair => {
-    return {
-        opponent: row.Opponent,
-        submitter: row.Submitter
-    }
-}
-
-const sortPeoplePairPoints = (row: peoplePairPoints): peoplePairPoints => {
-    let o = {} as peoplePairPoints
-    if (row.peoplePair.submitter > row.peoplePair.opponent) {
-        o.peoplePair = {
-            opponent: row.peoplePair.submitter,
-            submitter: row.peoplePair.opponent
-        }
-        o.points = {
-            Score: [row.points.Score[1], row.points.Score[0]],
-            Weight: row.points.Weight
-        }
-    } else {
-        o = row
-    }
-    return o
-}
-
-type peoplePairPointBucket = {
-    [key: string]: {
-        [key: string]: pointData
-    }
-}
-
-const bucketPairPoints = (points: peoplePairPoints[]): peoplePairPointBucket => {
-    let o = {} as peoplePairPointBucket
-    for ( let point of points ) {
-        if (o[point.peoplePair.submitter] == undefined) {
-            o[point.peoplePair.submitter] = {}
-        }
-
-        if (o[point.peoplePair.submitter][point.peoplePair.opponent] == undefined) {
-            o[point.peoplePair.submitter][point.peoplePair.opponent] = { Score: [0, 0], Weight: 0}
-        }
-
-        o[point.peoplePair.submitter][point.peoplePair.opponent] = combinePointData([o[point.peoplePair.submitter][point.peoplePair.opponent], point.points])
-    }
-    return o
-}
-
-const springForceWeight = (point: pointData, distance: number): number => {
-    //TODO: calculates force exerted upon other points based on pointdata and distance
-    return 0
-}
+//     return 0
+// }
 
 const doc = new GoogleSpreadsheet(SPREADSHEET, serviceAccountAuth);
 doc.loadInfo().then(async () => {
     const sheet = doc.sheetsByIndex[0];
     const userRows = await sheet.getRows<UsersRowData>();
-    const parsedRows = userRows.map(row => parseRowData(row.toObject() as UsersRowData));
-    const verifiedInputs = matchValidators(bucketValidators(parsedRows), bucketInputs(parsedRows))
-    const people = getPeople(verifiedInputs)
-    const pointData = verifiedInputs.map(row => {
-        return sortPeoplePairPoints({
-            points: combinePointData(matchToPointData(row)),
-            peoplePair: getPeoplePair(row)
-        })
-    })
-    const bucketPairs = bucketPairPoints(pointData)
+    const verifiedInputs = VerifiedInputs.fromUsersRowData(userRows.map(row => row.toObject() as UsersRowData))
+    const pointData = verifiedInputs.rows.map(input => PeoplePointData.fromGame(input))
+    // const people = getPeople(verifiedInputs)
+    const bucketPairs = new PeoplePointBucket(pointData)
 
-    console.log(people);
+    // console.log(people);
     console.log(bucketPairs);
 });
